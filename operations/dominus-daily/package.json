@@ -1,0 +1,11 @@
+{
+  "name": "@torriani/dominus-daily-control-plane",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "lint": "node --check orchestrate.mjs && node --check lib/control-plane.mjs",
+    "typecheck": "node --check orchestrate.mjs && node --check lib/control-plane.mjs",
+    "build": "npm run lint"
+  }
+}

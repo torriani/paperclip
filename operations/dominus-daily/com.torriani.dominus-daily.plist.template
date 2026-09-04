@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/zsh</string><string>__RUNNER__</string><string>__PHASE__</string></array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>__HOUR__</integer><key>Minute</key><integer>__MINUTE__</integer></dict>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>__LOG_DIR__/__PHASE__.stdout.log</string>
+  <key>StandardErrorPath</key><string>__LOG_DIR__/__PHASE__.stderr.log</string>
+</dict>
+</plist>
