@@ -1,5 +1,5 @@
 {
-  "version": "2026-09-04.1",
+  "version": "2026-09-05.2",
   "timezone": "America/Sao_Paulo",
   "dominusRepo": "/Users/julianotorriani/claude/dominus-oficial",
   "organizations": ["Torriani", "Plenna"],
@@ -33,10 +33,16 @@
   "remediation": {
     "enabled": false,
     "reason": "QA gate: enable only after behavioral concurrency, circuit-breaker and rollback tests",
+    "endpoint": "https://ukmropshnxcqiagrahqk.supabase.co/functions/v1/dominus-remediate",
+    "maxCampaignCandidatesPerRun": 5,
+    "organizations": [
+      { "name": "Torriani", "id": "0d29d163-872c-4d17-a42b-cdf188c76fb8" },
+      { "name": "Plenna", "id": "252b024c-ea47-423b-92b1-844e0de00371" }
+    ],
     "campaignRecovery": {
       "owner": "Dominus",
       "canonicalExecutor": "comm-campaign-auto-recovery",
-      "mode": "observe-and-delegate",
+      "mode": "bounded-canonical-recovery",
       "directMutation": false
     }
   }

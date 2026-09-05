@@ -10,7 +10,7 @@ limites do watchdog. Segredos ficam somente no Chaves do macOS.
 |---|---|---|
 | 23:30 | `baseline` | congela escopo/checks do ciclo |
 | 00:30 | `diagnose` | coleta saúde e evidência read-only |
-| 01:30 | `remediate` | observa/delega ao executor canônico |
+| 01:30 | `remediate` | chama o endpoint governado de remediação |
 | 03:30 | `reverify` | faz segunda leitura independente |
 | 04:45 | `preflight` | valida Paperclip, gateway, relógio e disco |
 | 05:00 | `audit` | materializa auditoria e agentes no Paperclip |
@@ -20,11 +20,24 @@ limites do watchdog. Segredos ficam somente no Chaves do macOS.
 O watchdog roda a cada cinco minutos. Estado retomável, evidências e snapshots
 ficam em `~/.paperclip/instances/eliaquim/dominus-daily/`, com permissão privada.
 
-Mensageria não é alterada por este executor. A recuperação permanece no
-`comm-campaign-auto-recovery` do Dominus, que é o zelador canônico. Este plano
-somente observa, registra e delega; não duplica classificação nem faz SQL direto.
-O runbook local de restart existe, mas `remediation.enabled` permanece `false`
-até passar pelo gate comportamental de concorrência, circuit breaker e rollback.
+O executor local nunca acessa o banco diretamente. Ele chama somente
+`dominus-remediate`, autenticado pela entrada `torriani-dominus-remediation` do
+Chaves do macOS. O backend aplica idempotência, cooldown e delega mensageria ao
+`comm-campaign-auto-recovery` canônico. Por ciclo, o runner atualiza o monitoring
+uma vez (Torriani é a organização proprietária do recibo) e reconcilia no máximo
+cinco campanhas globais retornadas pelo backend. A reconciliação não envia ao
+provider: o cron canônico retoma depois. Não há restart automático de WhatsApp.
+Cada chamada ao backend expira em 45 segundos. Em produção, somente respostas
+`succeeded` ou `noop` são sucesso; `preview` é aceito exclusivamente em dry-run.
+Resposta vazia, desconhecida, `failed` ou `blocked` produz falha parcial.
+Cada resultado produtivo (`succeeded`, `noop` ou falha) gera uma issue diária
+idempotente no Paperclip com organização, campanha, estado anterior, resultado e
+`receiptId`, sempre sanitizados. Se o Paperclip não aceitar o recibo, o ciclo
+mantém o lock e exige reconciliação; dry-run nunca cria essas issues.
+
+`remediation.enabled` permanece `false` até o QA. Com o kill switch desligado, a
+execução produtiva fica `gated`. `--dry-run` e o canário ainda exercitam o backend,
+mas todos os POSTs levam `dryRun: true`, portanto não produzem mutações.
 
 ## Operação
 
@@ -52,9 +65,17 @@ sender força outra consolidação imediatamente antes do envio e verifica o has
 snapshot persistido. Evidência anterior às 04:45, fonte crítica indisponível ou
 gateway parado produz `FALHA PARCIAL`; não é convertido em sucesso.
 
-O canário usa um dia isolado, marca as fases como simuladas e não chama o sender.
+O canário usa um dia isolado, marca as fases como simuladas e exercita o sender
+somente em dry-run, sem comunicação externa.
 Mudanças de banco, índices, RLS, código ou credenciais continuam fora deste
 executor e seguem story, QA e deploy próprios.
+
+O estado separado da remediação fica em `dominus-daily/remediation/`, com recibos
+e locks distintos `*.dry-run.*` e `*.production.*`. Assim, um preview interrompido
+jamais impede uma execução produtiva. O lock é
+criado com exclusividade (`wx`). Concorrência, processo interrompido ou falha
+ambígua deixam o lock preservado e bloqueiam novas tentativas até reconciliação
+operacional; o runner nunca remove um lock que pareça antigo automaticamente.
 
 ## Rollback
 

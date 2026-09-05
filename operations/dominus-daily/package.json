@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "lint": "node --check orchestrate.mjs && node --check lib/control-plane.mjs",
-    "typecheck": "node --check orchestrate.mjs && node --check lib/control-plane.mjs",
+    "lint": "node --check orchestrate.mjs && node --check lib/control-plane.mjs && node --check lib/remediation.mjs",
+    "typecheck": "node --check orchestrate.mjs && node --check lib/control-plane.mjs && node --check lib/remediation.mjs",
     "build": "npm run lint"
   }
 }

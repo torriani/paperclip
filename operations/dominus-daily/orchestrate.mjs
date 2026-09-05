@@ -4,6 +4,7 @@ import { chmod, mkdir, open, readFile, statfs, unlink, writeFile } from "node:fs
 import { promisify } from "node:util";
 import path from "node:path";
 import { parseLocalCutoff, redact, shouldRunPhase, sourceStatus, stableHash, watchdogDecision, worstStatus } from "./lib/control-plane.mjs";
+import { REMEDIATION_ENDPOINT, runRemediation } from "./lib/remediation.mjs";
 
 const exec = promisify(execFile);
 const ROOT = path.resolve(import.meta.dirname);
@@ -84,7 +85,7 @@ async function migrationDrift() {
   } catch (error) { return { status: "unavailable", error: String(error.message || error).slice(0, 800) }; }
 }
 async function executorIntegrity() {
-  const files = ["orchestrate.mjs", "lib/control-plane.mjs", "config/control-plane.json"];
+  const files = ["orchestrate.mjs", "lib/control-plane.mjs", "lib/remediation.mjs", "config/control-plane.json"];
   const contents = await Promise.all(files.map(file => readFile(path.join(ROOT, file), "utf8")));
   return { status: "ok", files, sha256: stableHash(contents.join("\n--FILE--\n")) };
 }
@@ -130,18 +131,24 @@ const diagnose = (day, file, state, options) => tracked(day, file, state, "diagn
   return { paperclip, gateway, dominus, advisors, migrations, integrity, backupRestore: { status: "unavailable", reason: "requires_management_api_or_isolated_restore_drill" } };
 }, options);
 const remediate = (day, file, state, options) => tracked(day, file, state, "remediate", async () => {
-  const before = await gatewayStatus();
-  const actions = [];
-  if (before.service !== "running" && CONFIG.remediation.enabled) {
-    if (options.dryRun || options.simulated) actions.push({ runbook: "whatsapp-service-restart-v1", status: "simulated" });
-    else {
-      await exec("torriani-whatsapp", ["restart"], { timeout: 30000 });
-      const after = await gatewayStatus();
-      actions.push({ runbook: "whatsapp-service-restart-v1", status: after.service === "running" ? "succeeded" : "failed", before, after });
-      if (after.service !== "running") throw new Error("WhatsApp service restart did not restore the service");
-    }
+  const dryRun = Boolean(options.dryRun || options.simulated);
+  if (!CONFIG.remediation.enabled && !dryRun) return { status: "gated", remediationEnabled: false, reason: CONFIG.remediation.reason };
+  try {
+    if (CONFIG.remediation.endpoint !== REMEDIATION_ENDPOINT) throw new Error("Remediation endpoint pin mismatch; credential access blocked");
+    return await runRemediation({
+      day, stateDir: STATE_DIR, config: CONFIG.remediation, token: await keychain("torriani-dominus-remediation"), dryRun,
+      onReceipt: async receipt => createIssueOnce({
+        title: `[${day}] Remediações Dominus · ${receipt.action} · ${receipt.organizationId} · ${receipt.campaignId || "organization"}`,
+        description: JSON.stringify(redact({ action: receipt.action, organizationId: receipt.organizationId, campaignId: receipt.campaignId, status: receipt.status, receiptId: receipt.receiptId, before: receipt.before, result: receipt.result }), null, 2),
+        status: ["succeeded", "noop"].includes(receipt.status) ? "done" : "blocked",
+        priority: receipt.status === "failed" ? "critical" : "high",
+        assigneeAgentId: AGENTS.eliaquim,
+      }),
+    });
+  } catch (error) {
+    if (!dryRun) await createIssueOnce({ title: `[${day}] REMEDIAÇÃO PARCIAL`, description: `Executor local falhou e reteve o lock para reconciliação manual. Nenhuma saúde foi presumida. Erro: ${String(error.message || error).slice(0, 800)}`, status: "blocked", priority: "critical", assigneeAgentId: AGENTS.eliaquim });
+    throw error;
   }
-  return { mode: options.simulated ? "dry-run" : CONFIG.remediation.enabled ? "bounded-runbooks" : "qa-gated-observation", remediationEnabled: CONFIG.remediation.enabled, canonicalPipelineRecovery: "comm-campaign-auto-recovery", actions, note: before.whatsapp === "disconnected" ? "Pairing requires human QR; automatic message delivery remains blocked." : CONFIG.remediation.enabled ? null : CONFIG.remediation.reason };
 }, options);
 const reverify = (day, file, state, options) => tracked(day, file, state, "reverify", async () => ({ dominus: await dominusAudit(shiftDay(day, -1)), independentRead: true }), options);
 const preflight = (day, file, state, options) => tracked(day, file, state, "preflight", async () => {
@@ -177,11 +184,14 @@ async function consolidate(day, file, state, options = {}) {
     const securityErrors = Number(evidence.advisors.security?.byLevel?.ERROR || 0);
     const securityStatus = evidence.advisors.security?.status === "ok" && securityErrors === 0 ? "fresh" : evidence.advisors.security ? "partial" : "unavailable";
     const migrationsStatus = evidence.migrations.status === "ok" ? "fresh" : evidence.migrations.status === "drift" ? "partial" : "unavailable";
+    const remediationEvidence = state.phases?.remediate?.evidence;
+    const remediationStatus = state.phases?.remediate?.status === "succeeded" && remediationEvidence?.status === "succeeded" ? "fresh" : "partial";
     const statuses = {
       dominus: organizationsOk ? sourceStatus({ observedAt: evidence.dominus.observedAt, minimumObservedAt: cutoff, available: evidence.dominus.status !== "unavailable" }) : "partial",
       database: databaseStatus,
       security: securityStatus,
       migrations: migrationsStatus,
+      remediation: remediationStatus,
       paperclip: sourceStatus({ observedAt: evidence.paperclip.observedAt, minimumObservedAt: cutoff, available: evidence.paperclip.status === "ok" }),
       gateway: sourceStatus({ observedAt: evidence.gateway.observedAt, minimumObservedAt: cutoff, available: evidence.gateway.service === "running" && evidence.gateway.whatsapp === "connected" }),
       agents: agentRunsOk ? "fresh" : "partial",
@@ -189,7 +199,7 @@ async function consolidate(day, file, state, options = {}) {
     const globalStatus = worstStatus(Object.values(statuses));
     const orgs = evidence.dominus.organizations || [];
     const lines = orgs.length ? orgs.map(org => org.campaignContacts ? `${org.name}: enviadas ${org.campaignContacts.sent}, na fila ${org.campaignContacts.queued}, não enviadas ${org.campaignContacts.notSent}, falhas ${org.campaignContacts.failed}` : `${org.name}: indisponível`) : ["Mensageria: indisponível"];
-    const report = [`RELATÓRIO DIÁRIO DOMINUS · ${shiftDay(day, -1)}`, "", `STATUS: ${globalStatus === "fresh" ? "EVIDÊNCIA ATUAL" : "FALHA PARCIAL"}`, `EVIDÊNCIAS: dominus=${statuses.dominus}; banco=${statuses.database}; segurança=${statuses.security}; migrations=${statuses.migrations}; paperclip=${statuses.paperclip}; gateway=${statuses.gateway}`, `GERADO EM: ${new Date().toISOString()}`, `CONFIG: ${CONFIG.version}`, "", ...lines, "", `BANCO: cron falhas 24h=${cronFailures}; locks=${db?.operations?.blockedLocks ?? "indisponível"}; transações longas=${db?.operations?.longTransactions ?? "indisponível"}`, `SEGURANÇA: errors=${securityErrors}; warnings=${evidence.advisors.security?.byLevel?.WARN ?? "indisponível"}`, `PERFORMANCE ADVISOR: warnings=${evidence.advisors.performance?.byLevel?.WARN ?? "indisponível"}`, `MIGRATIONS: divergências=${evidence.migrations.mismatchCount ?? "indisponível"}`, "", `PAPERCLIP: ${children.map(item => `${item.identifier}=${item.runStatus}`).join(", ") || "tarefas não localizadas"}`].join("\n");
+    const report = [`RELATÓRIO DIÁRIO DOMINUS · ${shiftDay(day, -1)}`, "", `STATUS: ${globalStatus === "fresh" ? "EVIDÊNCIA ATUAL" : "FALHA PARCIAL"}`, `EVIDÊNCIAS: dominus=${statuses.dominus}; banco=${statuses.database}; segurança=${statuses.security}; migrations=${statuses.migrations}; remediação=${statuses.remediation}; paperclip=${statuses.paperclip}; gateway=${statuses.gateway}`, `GERADO EM: ${new Date().toISOString()}`, `CONFIG: ${CONFIG.version}`, "", ...lines, "", `BANCO: cron falhas 24h=${cronFailures}; locks=${db?.operations?.blockedLocks ?? "indisponível"}; transações longas=${db?.operations?.longTransactions ?? "indisponível"}`, `SEGURANÇA: errors=${securityErrors}; warnings=${evidence.advisors.security?.byLevel?.WARN ?? "indisponível"}`, `PERFORMANCE ADVISOR: warnings=${evidence.advisors.performance?.byLevel?.WARN ?? "indisponível"}`, `MIGRATIONS: divergências=${evidence.migrations.mismatchCount ?? "indisponível"}`, "", `PAPERCLIP: ${children.map(item => `${item.identifier}=${item.runStatus}`).join(", ") || "tarefas não localizadas"}`].join("\n");
     const snapshot = redact({ generatedAt: new Date().toISOString(), dataDay: shiftDay(day, -1), configVersion: CONFIG.version, statuses, globalStatus, evidence, report });
     snapshot.hash = stableHash(snapshot);
     const snapshotFile = path.join(STATE_DIR, `${day}-snapshot.json`); const reportFile = path.join(STATE_DIR, `${day}-report.txt`);

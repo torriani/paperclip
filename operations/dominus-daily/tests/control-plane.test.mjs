@@ -69,10 +69,11 @@ test("consolidation propagates advisors, migration drift and cron failures", asy
   assert.match(source, /cronFailures !== 0/);
 });
 
-test("remediation has a bounded service restart runbook", async () => {
+test("remediation uses only the governed Dominus endpoint", async () => {
   const source = await readFile(new URL("../orchestrate.mjs", import.meta.url), "utf8");
-  assert.match(source, /whatsapp-service-restart-v1/);
-  assert.match(source, /await exec\("torriani-whatsapp", \["restart"\]/);
+  assert.match(source, /runRemediation/);
+  assert.match(source, /torriani-dominus-remediation/);
+  assert.doesNotMatch(source, /torriani-whatsapp", \["restart"\]/);
 });
 
 test("sender acquires an exclusive lock before external delivery", async () => {
@@ -88,4 +89,12 @@ test("diagnose executes Supabase advisors and migration drift instead of only de
   assert.match(source, /"db", "advisors", "--linked", "--type", type/);
   assert.match(source, /"migration", "list", "--linked"/);
   assert.match(source, /backupRestore: \{ status: "unavailable"/);
+});
+
+test("endpoint pin is checked before Keychain credential access and receipts use createIssueOnce", async () => {
+  const source = await readFile(new URL("../orchestrate.mjs", import.meta.url), "utf8");
+  const phase = source.slice(source.indexOf("const remediate ="), source.indexOf("const reverify ="));
+  assert.ok(phase.indexOf("CONFIG.remediation.endpoint !== REMEDIATION_ENDPOINT") < phase.indexOf('keychain("torriani-dominus-remediation")'));
+  assert.match(phase, /onReceipt: async receipt => createIssueOnce/);
+  assert.match(source, /"lib\/remediation\.mjs"/);
 });
