@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>__LABEL__</string>
+  <key>ProgramArguments</key><array><string>/bin/zsh</string><string>__RUNNER__</string><string>watchdog</string></array>
+  <key>StartInterval</key><integer>__INTERVAL__</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>__LOG_DIR__/watchdog.stdout.log</string>
+  <key>StandardErrorPath</key><string>__LOG_DIR__/watchdog.stderr.log</string>
+</dict></plist>
