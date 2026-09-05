@@ -31,8 +31,8 @@
     "messaging": ["expected_vs_actual", "queue_age", "failed", "delayed", "duplicates", "retry_loops", "provider_receipts"]
   },
   "remediation": {
-    "enabled": false,
-    "reason": "QA gate: enable only after behavioral concurrency, circuit-breaker and rollback tests",
+    "enabled": true,
+    "reason": "Founder authorized 2026-09-05; staged security and E2E gates passed",
     "endpoint": "https://ukmropshnxcqiagrahqk.supabase.co/functions/v1/dominus-remediate",
     "maxCampaignCandidatesPerRun": 5,
     "organizations": [
